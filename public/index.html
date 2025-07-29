@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Slack Viewer - Full UI</title>
+  <script src="https://unpkg.com/vue"></script>
+  <script src="https://unpkg.com/naive-ui"></script>
+  <style>
+    body {
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      background: #f7f8fa;
+    }
+    .container {
+      max-width: 720px;
+      margin: auto;
+    }
+    .message-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .message-meta {
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 4px;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    .message-meta {
+      font-size: 12px;
+      color: #888;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+<div id="app" class="container">
+  <n-space vertical size="large">
+    <n-h2>🧵 Slack Thread Viewer</n-h2>
+
+    <n-input v-model:value="token" type="password" placeholder="Nhập Slack token..." clearable ></n-input>
+    <n-input v-model:value="slackUrl" placeholder="Dán Slack thread URL..." clearable ></n-input>
+    <n-button @click="startConversation" type="primary" :disabled="loading" :loading="loading">
+      🔍 Xem hội thoại
+    </n-button>
+
+    <n-alert v-if="error" type="error">{{ error }}</n-alert>
+
+    <n-list bordered v-if="messages.length" style="margin-top: 20px">
+      <n-list-item v-for="msg in visibleMessages" :key="msg.ts">
+        <div>
+          <div class="message-meta">
+            <n-avatar :src="getUser(msg.user).avatar" :alt="getUser(msg.user).name" size="small" ></n-avatar>
+            <strong>{{ getUser(msg.user).name }}</strong> – {{ formatTimestamp(msg.ts) }}
+          </div>
+          <div class="message-text" v-html="replaceMentions(msg.text)"></div>
+
+          <div v-if="msg.files && msg.files.length" class="message-meta">
+            <div v-for="file in msg.files" :key="file.id">📎 {{ file.name }}</div>
+          </div>
+        </div>
+      </n-list-item>
+    </n-list>
+
+    <n-alert v-if="error" type="error">{{ error }}</n-alert>
+    <n-button
+            v-if="nextCursor"
+            @click="loadMore"
+            type="default"
+            secondary
+            :disabled="loading"
+    >⬇️ Tải thêm</n-button>
+  </n-space>
+</div>
+
+<script>
+  const { createApp } = Vue
+
+  createApp({
+    data() {
+      return {
+        token: '',
+        slackUrl: '',
+        messages: [],
+        nextCursor: null,
+        channel: '',
+        threadTs: '',
+        loading: false,
+        error: '',
+        userMap: {
+          U050Z4P6PGW: { name: "Van Phan", avatar: "https://ui-avatars.com/api/?name=Van+Phan" },
+          U03H7QQAN75: { name: "Phu Nguyen", avatar: "https://ca.slack-edge.com/T03H0BP73A9-U03H7QQAN75-76144472a79b-50" },
+          U07PYEYE4R5: { name: "Trong Dat", avatar: "https://ca.slack-edge.com/T03H0BP73A9-U07PYEYE4R5-9e832953ff27-50" },
+          U0322QW0UNT: { name: "KABURAKI", avatar: "https://ca.slack-edge.com/T01Q8FA80N9-U0322QW0UNT-27fd004dddbf-50" },
+          U030J0CKKLM: { name: "Yoshimura", avatar: "https://ca.slack-edge.com/T01Q8FA80N9-U030J0CKKLM-ea50addcdf62-50" },
+          U0811H8L6JK: { name: "Yamaguchi", avatar: "https://ca.slack-edge.com/T01Q8FA80N9-U0811H8L6JK-7bab4bdca1d9-50" },
+        }
+      }
+    },
+    computed: {
+      visibleMessages() {
+        return this.messages.slice().reverse()
+      }
+    },
+    methods: {
+      getUser(userId) {
+        return this.userMap[userId] || { name: userId, avatar: "https://ui-avatars.com/api/?name=" + userId }
+      },
+      replaceMentions(text) {
+        return text.replace(/<@([A-Z0-9]+)>/g, (_, uid) => (`<b>${"@" + this.getUser(uid).name}</b>`))
+      },
+      formatTimestamp(ts) {
+        const d = new Date(parseFloat(ts) * 1000)
+        return d.toLocaleString('vi-VN')
+      },
+      extractSlackInfo(url) {
+        const match = url.match(/\/archives\/([A-Z0-9]+)\/p(\d{16})/)
+        if (match) {
+          return {
+            channel: match[1],
+            ts: match[2].slice(0, 10) + '.' + match[2].slice(10)
+          }
+        }
+        return null
+      },
+      async startConversation() {
+        this.messages = []
+        this.nextCursor = null
+        const info = this.extractSlackInfo(this.slackUrl)
+        if (!info) {
+          this.error = "❌ Link Slack không hợp lệ."
+          return
+        }
+        this.channel = info.channel
+        this.threadTs = info.ts
+        await this.fetchMessages(true)
+      },
+      async loadMore() {
+        this.loading = true
+        await setTimeout(() => {
+          this.loading = false
+        }, 2000)
+        await this.fetchMessages(false)
+      },
+      async fetchMessages(reset = false) {
+        this.loading = true
+        this.error = ''
+
+        try {
+          const res = await fetch("/.netlify/functions/fetch-thread", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              token: this.token,
+              channel: this.channel,
+              ts: this.threadTs,
+              cursor: reset ? null : this.nextCursor
+            })
+          })
+
+          const json = await res.json()
+
+          if (!res.ok) {
+            this.error = "Slack API Error: " + (res.error || "unknown error")
+          } else {
+            if (reset) {
+              this.messages = json.messages
+            } else {
+              this.messages = this.messages.concat(json.messages)
+            }
+            this.nextCursor = json.next_cursor || null
+          }
+        } catch (err) {
+          this.error = "Không thể gọi Slack API. Timeout rate limiting"
+        } finally {
+          this.loading = false
+        }
+      }
+    }
+  }).use(naive).mount('#app')
+</script>
+</body>
+</html>
